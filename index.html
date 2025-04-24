@@ -1,0 +1,453 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>متتبع العادات اليومية</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: 'Arial', sans-serif;
+      direction: rtl;
+      background: linear-gradient(to bottom, #1f2937, #111827);
+      color: #d1d5db;
+    }
+    .completed {
+      text-decoration: line-through;
+      color: #6b7280;
+    }
+    .checkbox {
+      width: 20px;
+      height: 20px;
+      accent-color: #3b82f6;
+      margin-left: 12px;
+      transition: all 0.2s;
+    }
+    .day-card {
+      background: #374151;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+      transition: transform 0.2s;
+    }
+    .day-card:hover {
+      transform: translateY(-5px);
+    }
+    .task-time {
+      min-width: 120px;
+      color: #9ca3af;
+      font-weight: 500;
+    }
+    .modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.7);
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-content {
+      background: #1f2937;
+      padding: 20px;
+      border-radius: 12px;
+      width: 90%;
+      max-width: 400px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      border: 1px solid #4b5563;
+    }
+    .modal-content input {
+      background: #4b5563;
+      color: #d1d5db;
+      border: 1px solid #6b7280;
+    }
+    .modal-content input::placeholder {
+      color: #9ca3af;
+    }
+    .btn {
+      transition: background-color 0.2s;
+    }
+    .nav-btn {
+      background: #4b5563;
+      color: #d1d5db;
+      padding: 10px 20px;
+      border-radius: 8px;
+      margin: 0 8px;
+    }
+    .nav-btn.active {
+      background: #3b82f6;
+      color: #ffffff;
+    }
+    .nav-btn:hover {
+      background: #6b7280;
+    }
+    .stats-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .stats-table th, .stats-table td {
+      padding: 12px;
+      border-bottom: 1px solid #4b5563;
+    }
+    .stats-table th {
+      background: #374151;
+      color: #ffffff;
+      font-weight: bold;
+    }
+    .stats-table td {
+      background: #2d3748;
+    }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <div class="max-w-4xl mx-auto">
+    <h1 class="text-3xl font-bold text-center text-white mb-6">متتبع العادات اليومية</h1>
+    
+    <!-- شريط التنقل -->
+    <div class="flex flex-wrap justify-center mb-6 space-x-2">
+      <div id="navContainer" class="flex flex-wrap space-x-2"></div>
+      <button id="addPage" class="nav-btn bg-green-500 text-white hover:bg-green-600 btn">إضافة صفحة جديدة</button>
+    </div>
+
+    <!-- عناصر التحكم في الصفحة -->
+    <div id="pageControls" class="bg-gray-800 p-4 rounded-lg shadow-md mb-6 flex justify-between items-center">
+      <div class="flex" style="gap: 20px;">
+        <button id="addDay" class="bg-green-500 text-white py-2 px-4 rounded-lg hover:bg-green-600 btn">إضافة يوم جديد</button>
+        <button id="deletePage" class="bg-red-500 text-white py-2 px-4 rounded-lg hover:bg-red-600 btn">حذف الصفحة</button>
+      </div>
+    </div>
+
+    <!-- قايمة الأيام -->
+    <div id="daysContainer" class="grid gap-6 md:grid-cols-2"></div>
+
+    <!-- صفحة الإحصائيات -->
+    <div id="statsContainer" class="hidden">
+      <h2 class="text-2xl font-semibold text-white mb-4">إحصائيات الصفحات</h2>
+      <div id="statsContent" class="bg-gray-800 p-4 rounded-lg shadow-md">
+        <table class="stats-table">
+          <thead>
+            <tr>
+              <th>الصفحة</th>
+              <th>اليوم</th>
+              <th>نسبة الإكمال</th>
+            </tr>
+          </thead>
+          <tbody id="statsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- نموذج إضافة/تعديل المهمة -->
+  <div id="taskModal" class="modal">
+    <div class="modal-content">
+      <h2 id="modalTitle" class="text-xl font-semibold text-white mb-4"></h2>
+      <input id="taskInput" type="text" placeholder="المهمة" class="w-full p-2 mb-3 rounded-lg">
+      <input id="timeInput" type="text" placeholder="الوقت (مثل: الساعة 8:30)" class="w-full p-2 mb-3 rounded-lg">
+      <div class="flex justify-end space-x-3">
+        <button id="saveTask" class="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 btn">حفظ</button>
+        <button id="cancelTask" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-lg hover:bg-gray-700 btn">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- نموذج إضافة صفحة -->
+  <div id="pageModal" class="modal">
+    <div class="modal-content">
+      <h2 class="text-xl font-semibold text-white mb-4">إضافة صفحة جديدة</h2>
+      <input id="pageInput" type="text" placeholder="اسم الصفحة" class="w-full p-2 mb-3 rounded-lg">
+      <div class="flex justify-end space-x-3">
+        <button id="savePage" class="bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 btn">حفظ</button>
+        <button id="cancelPage" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-lg hover:bg-gray-700 btn">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const navContainer = document.getElementById('navContainer');
+    const pageControls = document.getElementById('pageControls');
+    const daysContainer = document.getElementById('daysContainer');
+    const statsContainer = document.getElementById('statsContainer');
+    const statsBody = document.getElementById('statsBody');
+    const addDayButton = document.getElementById('addDay');
+    const deletePageButton = document.getElementById('deletePage');
+    const addPageButton = document.getElementById('addPage');
+    const taskModal = document.getElementById('taskModal');
+    const modalTitle = document.getElementById('modalTitle');
+    const taskInput = document.getElementById('taskInput');
+    const timeInput = document.getElementById('timeInput');
+    const saveTask = document.getElementById('saveTask');
+    const cancelTask = document.getElementById('cancelTask');
+    const pageModal = document.getElementById('pageModal');
+    const pageInput = document.getElementById('pageInput');
+    const savePage = document.getElementById('savePage');
+    const cancelPage = document.getElementById('cancelPage');
+
+    // تحميل البيانات من localStorage
+    let pages = JSON.parse(localStorage.getItem('pages')) || {
+      'عادات المذاكرة': { habits: {}, tracking: {}, totalDays: 0 },
+      'عادات روتينية': { habits: {}, tracking: {}, totalDays: 0 },
+      'الصلاة': {
+        habits: {
+          1: [
+            { task: 'صلاة الفجر', time: '' },
+            { task: 'صلاة الظهر', time: '' },
+            { task: 'صلاة العصر', time: '' }
+          ]
+        },
+        tracking: { 1: [false, false, false] },
+        totalDays: 1
+      }
+    };
+    let currentPage = Object.keys(pages)[0] || 'عادات المذاكرة';
+
+    // عرض أزرار التنقل
+    function renderNav() {
+      navContainer.innerHTML = Object.keys(pages).map(page => `
+        <button class="nav-btn ${page === currentPage ? 'active' : ''}" onclick="switchPage('${page}')">${page}</button>
+      `).join('');
+      localStorage.setItem('pages', JSON.stringify(pages));
+    }
+
+    // عرض الأيام والمهام للصفحة الحالية
+    function renderDays() {
+      daysContainer.innerHTML = '';
+      statsContainer.classList.add('hidden');
+      pageControls.classList.remove('hidden');
+      daysContainer.classList.remove('hidden');
+      
+      const pageData = pages[currentPage];
+      for (let day = 1; day <= pageData.totalDays; day++) {
+        if (!pageData.habits[day]) pageData.habits[day] = [];
+        if (!pageData.tracking[day]) pageData.tracking[day] = Array(pageData.habits[day].length).fill(false);
+
+        const dayCard = document.createElement('div');
+        dayCard.className = 'day-card bg-gray-700 p-4 rounded-lg';
+        
+        const completed = pageData.tracking[day].filter(status => status).length;
+        const percentage = pageData.habits[day].length ? ((completed / pageData.habits[day].length) * 100).toFixed(0) : 0;
+
+        dayCard.innerHTML = `
+          <h2 class="text-xl font-semibold text-white mb-3">اليوم ${day} <span class="text-sm text-gray-400">(${percentage}% مكتمل)</span></h2>
+          <div class="flex space-x-6">
+            <button onclick="openAddTaskModal(${day})" class="bg-green-500 text-white py-1 px-3 rounded-lg hover:bg-green-600 btn">إضافة مهمة</button>
+            <button onclick="cloneDay(${day})" class="bg-purple-500 text-white py-1 px-3 rounded-lg hover:bg-purple-600 btn">استنساخ اليوم</button>
+          </div>
+          <ul class="space-y-2">
+            ${pageData.habits[day].map((habit, index) => `
+              <li class="flex items-center space-x-3">
+                <input type="checkbox" class="checkbox" ${pageData.tracking[day][index] ? 'checked' : ''} onchange="toggleHabit(${day}, ${index})">
+                <span class="${pageData.tracking[day][index] ? 'completed' : ''} flex-1">${habit.task}</span>
+                <span class="task-time ${pageData.tracking[day][index] ? 'completed' : ''}">${habit.time}</span>
+                <button onclick="openEditTaskModal(${day}, ${index})" class="text-blue-400 hover:text-blue-300 btn">تعديل</button>
+                <button onclick="deleteTask(${day}, ${index})" class="text-red-400 hover:text-red-300 btn">حذف</button>
+              </li>
+            `).join('')}
+          </ul>
+          <button onclick="deleteDay(${day})" class="mt-3 w-full bg-red-500 text-white py-1 rounded-lg hover:bg-red-600 btn">حذف اليوم</button>
+        `;
+        daysContainer.appendChild(dayCard);
+      }
+      localStorage.setItem('pages', JSON.stringify(pages));
+    }
+
+    // تبديل الصفحة
+    function switchPage(page) {
+      currentPage = page;
+      renderNav();
+      renderDays();
+    }
+
+    // عرض الإحصائيات
+    function showStats() {
+      currentPage = 'الإحصائيات';
+      renderNav();
+      pageControls.classList.add('hidden');
+      daysContainer.classList.add('hidden');
+      statsContainer.classList.remove('hidden');
+
+      let statsHTML = '';
+      Object.keys(pages).forEach(page => {
+        const pageData = pages[page];
+        for (let day = 1; day <= pageData.totalDays; day++) {
+          const completed = pageData.tracking[day]?.filter(status => status).length || 0;
+          const total = pageData.habits[day]?.length || 0;
+          const percentage = total ? ((completed / total) * 100).toFixed(0) : 0;
+          statsHTML += `<tr><td>${page}</td><td>اليوم ${day}</td><td>${percentage}%</td></tr>`;
+        }
+      });
+      statsBody.innerHTML = statsHTML;
+    }
+
+    // تبديل حالة المهمة
+    function toggleHabit(day, index) {
+      pages[currentPage].tracking[day][index] = !pages[currentPage].tracking[day][index];
+      renderDays();
+    }
+
+    // حذف يوم
+    function deleteDay(day) {
+      delete pages[currentPage].habits[day];
+      delete pages[currentPage].tracking[day];
+      pages[currentPage].totalDays--;
+
+      const newHabits = {};
+      const newTracking = {};
+      let newDay = 1;
+      for (let i = 1; i <= pages[currentPage].totalDays + 1; i++) {
+        if (pages[currentPage].habits[i] && pages[currentPage].tracking[i]) {
+          newHabits[newDay] = pages[currentPage].habits[i];
+          newTracking[newDay] = pages[currentPage].tracking[i];
+          newDay++;
+        }
+      }
+      pages[currentPage].habits = newHabits;
+      pages[currentPage].tracking = newTracking;
+
+      renderDays();
+    }
+
+    // حذف مهمة
+    function deleteTask(day, index) {
+      pages[currentPage].habits[day].splice(index, 1);
+      pages[currentPage].tracking[day].splice(index, 1);
+      renderDays();
+    }
+
+    // استنساخ يوم
+    function cloneDay(day) {
+      pages[currentPage].totalDays++;
+      pages[currentPage].habits[pages[currentPage].totalDays] = [...pages[currentPage].habits[day]];
+      pages[currentPage].tracking[pages[currentPage].totalDays] = Array(pages[currentPage].habits[pages[currentPage].totalDays].length).fill(false);
+      renderDays();
+    }
+
+    // فتح نموذج إضافة مهمة
+    function openAddTaskModal(day) {
+      modalTitle.textContent = `إضافة مهمة لليوم ${day}`;
+      taskInput.value = '';
+      timeInput.value = '';
+      saveTask.onclick = () => {
+        if (taskInput.value) {
+          pages[currentPage].habits[day].push({ task: taskInput.value, time: timeInput.value });
+          pages[currentPage].tracking[day].push(false);
+          taskModal.style.display = 'none';
+          renderDays();
+        }
+      };
+      taskModal.style.display = 'flex';
+    }
+
+    // فتح نموذج تعديل مهمة
+    function openEditTaskModal(day, index) {
+      modalTitle.textContent = `تعديل مهمة لليوم ${day}`;
+      taskInput.value = pages[currentPage].habits[day][index].task;
+      timeInput.value = pages[currentPage].habits[day][index].time;
+      saveTask.onclick = () => {
+        if (taskInput.value) {
+          pages[currentPage].habits[day][index] = { task: taskInput.value, time: timeInput.value };
+          taskModal.style.display = 'none';
+          renderDays();
+        }
+      };
+      taskModal.style.display = 'flex';
+    }
+
+    // إلغاء نموذج المهمة
+    cancelTask.onclick = () => {
+      taskModal.style.display = 'none';
+    };
+
+    // فتح نموذج إضافة صفحة
+    addPageButton.onclick = () => {
+      pageInput.value = '';
+      pageModal.style.display = 'flex';
+    };
+
+    // حفظ صفحة جديدة
+    savePage.onclick = () => {
+      if (pageInput.value && !pages[pageInput.value]) {
+        pages[pageInput.value] = { habits: {}, tracking: {}, totalDays: 0 };
+        currentPage = pageInput.value;
+        pageModal.style.display = 'none';
+        renderNav();
+        renderDays();
+      }
+    };
+
+    // إلغاء نموذج الصفحة
+    cancelPage.onclick = () => {
+      pageModal.style.display = 'none';
+    };
+
+    // حذف الصفحة
+    deletePageButton.onclick = () => {
+      if (confirm(`هل أنت متأكد من حذف صفحة "${currentPage}"؟`)) {
+        delete pages[currentPage];
+        const remainingPages = Object.keys(pages);
+        currentPage = remainingPages.length > 0 ? remainingPages[0] : '';
+        localStorage.setItem('pages', JSON.stringify(pages));
+        renderNav();
+        if (currentPage) {
+          renderDays();
+        } else {
+          pageControls.classList.add('hidden');
+          daysContainer.innerHTML = '<p class="text-center text-gray-400">لا توجد صفحات حاليًا. أضف صفحة جديدة.</p>';
+        }
+      }
+    };
+
+    // إضافة يوم جديد
+    addDayButton.addEventListener('click', () => {
+      pages[currentPage].totalDays++;
+      pages[currentPage].habits[pages[currentPage].totalDays] = [];
+      pages[currentPage].tracking[pages[currentPage].totalDays] = [];
+      renderDays();
+    });
+
+    // عرض الصفحة الأولى والتنقل
+    renderNav();
+    renderDays();
+  </script>
+</body>
+</html>
